@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codex-switch"
+version = "0.1.0"
+description = "CLI for managing and switching Codex auth snapshots"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Codex" }]
+dependencies = []
+
+[project.scripts]
+codex-switch = "codex_switch.cli:run"
+
+[tool.setuptools.packages.find]
+include = ["codex_switch*"]
