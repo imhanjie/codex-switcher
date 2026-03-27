@@ -9,7 +9,7 @@
 
 - 基于 Python 3.12 标准库实现，无第三方运行时依赖
 - 支持收录当前账号、调用 `codex login` 登录并收录
-- 支持列出、查看当前账号、切换、删除
+- 支持列出、查看当前账号、并发查询额度、切换、删除
 - 切换前自动备份 live `auth.json`
 - 对已纳管账号，`list / current / switch / remove` 前会自动同步最新 token
 - 支持通过环境变量覆盖默认目录，便于测试和隔离使用
@@ -18,7 +18,7 @@
 
 - 仅支持 ChatGPT 登录态的 `auth.json`
 - 不支持 `OPENAI_API_KEY` 模式
-- 不做额度读取、自动切换或进程管理
+- 不做自动切换或进程管理
 - 切换后如果 Codex CLI 或 App 已经在运行，需要你手动重启
 
 ## 安装
@@ -93,7 +93,20 @@ codex-switch switch someone
 codex-switch switch
 ```
 
-### 6. 删除某个已管理账号
+### 6. 查看所有已管理账号的额度
+
+```bash
+codex-switch usage
+```
+
+会按表格显示每个已管理账号的：
+
+- `5H`
+- `5H_RESET`
+- `WEEKLY`
+- `WEEKLY_RESET`
+
+### 7. 删除某个已管理账号
 
 ```bash
 codex-switch remove someone@example.com
@@ -146,6 +159,23 @@ codex-switch remove
 - 当前短 key
 - 当前账号是否已被 `codex-switch` 纳管
 - 当前账号是否是 registry 里的活动账号
+
+### `usage`
+
+查询所有已管理账号的额度信息，显示：
+
+- `EMAIL`
+- `5H`
+- `5H_RESET`
+- `WEEKLY`
+- `WEEKLY_RESET`
+
+行为规则：
+
+- 默认并发对每个受管账号的快照分别调用 usage API
+- 如果当前 live `auth.json` 对应的是某个已管理账号，该账号会优先使用当前 live token 查询
+- 单个账号查询失败时不会中断整张表，会在该行显示 `-` 并在表格后追加失败原因
+- 如果所有账号都查询失败，命令会返回非零退出码
 
 ### `switch [query]`
 

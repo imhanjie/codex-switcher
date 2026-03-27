@@ -15,6 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("list", help="列出已管理账号")
     subparsers.add_parser("current", help="显示当前 live auth.json 对应的账号")
+    subparsers.add_parser("usage", help="查询已管理账号的 5 小时和周额度")
 
     switch_parser = subparsers.add_parser("switch", help="切换到目标账号")
     switch_parser.add_argument("query", nargs="?", help="按邮箱精确/模糊匹配")
@@ -33,6 +34,25 @@ def _render_table(headers: list[str], rows: list[list[str]]) -> list[str]:
     rendered = ["  ".join(header.ljust(widths[index]) for index, header in enumerate(headers))]
     for row in rows:
         rendered.append("  ".join(cell.ljust(widths[index]) for index, cell in enumerate(row)))
+    return rendered
+
+
+def _render_grid_table(headers: list[str], rows: list[list[str]]) -> list[str]:
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for index, cell in enumerate(row):
+            widths[index] = max(widths[index], len(cell))
+
+    def border() -> str:
+        return "+" + "+".join("-" * (width + 2) for width in widths) + "+"
+
+    def render_row(cells: list[str]) -> str:
+        return "| " + " | ".join(cell.ljust(widths[index]) for index, cell in enumerate(cells)) + " |"
+
+    rendered = [border(), render_row(headers), border()]
+    for row in rows:
+        rendered.append(render_row(row))
+    rendered.append(border())
     return rendered
 
 
@@ -68,6 +88,29 @@ def run(argv: Sequence[str] | None = None) -> int:
                 print(f"短 key：{current['short_key']}")
                 print(f"是否受管：{current['managed']}")
                 print(f"是否 registry 当前活动账号：{current['active']}")
+            case "usage":
+                result = service.usage()
+                if not result.rows:
+                    print("当前没有任何已管理账号。")
+                    return 0
+                rendered = _render_grid_table(
+                    ["EMAIL", "5H", "5H_RESET", "WEEKLY", "WEEKLY_RESET"],
+                    [
+                        [
+                            row["email"],
+                            row["five_hour"],
+                            row["five_hour_reset"],
+                            row["weekly"],
+                            row["weekly_reset"],
+                        ]
+                        for row in result.rows
+                    ],
+                )
+                for line in rendered:
+                    print(line)
+                for failure in result.failures:
+                    print(f"提示：{failure}")
+                return 0 if result.has_success else 1
             case "switch":
                 record = service.switch(query=args.query)
                 print(f"已切换到：{record.email}")

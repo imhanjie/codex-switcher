@@ -3,4 +3,5 @@ __all__ = [
     "cli",
     "service",
     "store",
+    "usage",
 ]

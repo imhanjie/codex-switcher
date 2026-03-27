@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from .auth import AuthError, AuthInfo, parse_auth_file
@@ -16,6 +17,12 @@ from .store import (
     short_key,
     write_bytes_atomic,
 )
+from .usage import (
+    UsageError,
+    fetch_usage_from_auth_bytes,
+    format_reset_time,
+    format_usage_window,
+)
 
 
 class CliError(Exception):
@@ -28,6 +35,27 @@ class SyncResult:
     live_bytes: bytes
     managed: bool
     changed: bool
+
+
+@dataclass(slots=True)
+class UsageCommandResult:
+    rows: list[dict[str, str]]
+    failures: list[str]
+    success_count: int
+
+    @property
+    def has_success(self) -> bool:
+        return self.success_count > 0
+
+
+@dataclass(slots=True)
+class UsageRowResult:
+    row: dict[str, str]
+    failure: str | None
+    success: bool
+
+
+USAGE_MAX_WORKERS = 8
 
 
 class CodexSwitchService:
@@ -86,6 +114,34 @@ class CodexSwitchService:
             "managed": "yes" if managed_account else "no",
             "active": "yes" if registry.active_record_key == sync.live_info.record_key else "no",
         }
+
+    def usage(self) -> UsageCommandResult:
+        registry = self._load_registry()
+        accounts = sorted(registry.accounts, key=lambda item: (item.email, item.record_key))
+        live_override = self._load_live_usage_override(registry)
+
+        rows: list[dict[str, str]] = []
+        failures: list[str] = []
+        success_count = 0
+
+        if not accounts:
+            return UsageCommandResult(rows=rows, failures=failures, success_count=success_count)
+
+        max_workers = min(len(accounts), USAGE_MAX_WORKERS)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(self._usage_row_for_account, account, live_override)
+                for account in accounts
+            ]
+            for future in futures:
+                result = future.result()
+                rows.append(result.row)
+                if result.failure:
+                    failures.append(result.failure)
+                if result.success:
+                    success_count += 1
+
+        return UsageCommandResult(rows=rows, failures=failures, success_count=success_count)
 
     def switch(self, query: str | None = None, stdin_is_tty: bool | None = None) -> AccountRecord:
         registry, _ = self._load_and_sync_required_command()
@@ -167,6 +223,62 @@ class CodexSwitchService:
             return parse_auth_file(self.paths.live_auth_path)
         except AuthError as exc:
             raise CliError(str(exc)) from exc
+
+    def _load_live_usage_override(self, registry: Registry) -> tuple[str, bytes] | None:
+        try:
+            live_info, live_bytes = parse_auth_file(self.paths.live_auth_path)
+        except AuthError:
+            return None
+        if registry.find(live_info.record_key) is None:
+            return None
+        return live_info.record_key, live_bytes
+
+    def _auth_bytes_for_usage(
+        self,
+        account: AccountRecord,
+        live_override: tuple[str, bytes] | None,
+    ) -> bytes:
+        if live_override is not None and live_override[0] == account.record_key:
+            return live_override[1]
+
+        snapshot_path = self.paths.snapshot_path(account.record_key)
+        try:
+            return snapshot_path.read_bytes()
+        except FileNotFoundError as exc:
+            raise CliError(f"账号快照不存在：{snapshot_path}") from exc
+
+    def _usage_row_for_account(
+        self,
+        account: AccountRecord,
+        live_override: tuple[str, bytes] | None,
+    ) -> UsageRowResult:
+        try:
+            auth_bytes = self._auth_bytes_for_usage(account, live_override)
+            summary = fetch_usage_from_auth_bytes(auth_bytes)
+        except (CliError, UsageError) as exc:
+            return UsageRowResult(
+                row={
+                    "email": account.email,
+                    "five_hour": "-",
+                    "five_hour_reset": "-",
+                    "weekly": "-",
+                    "weekly_reset": "-",
+                },
+                failure=f"{account.email} 查询失败：{exc}",
+                success=False,
+            )
+
+        return UsageRowResult(
+            row={
+                "email": account.email,
+                "five_hour": format_usage_window(summary.five_hour),
+                "five_hour_reset": format_reset_time(summary.five_hour),
+                "weekly": format_usage_window(summary.weekly),
+                "weekly_reset": format_reset_time(summary.weekly),
+            },
+            failure=None,
+            success=True,
+        )
 
     def _write_snapshot(self, record_key: str, raw_bytes: bytes) -> None:
         write_bytes_atomic(self.paths.snapshot_path(record_key), raw_bytes)
